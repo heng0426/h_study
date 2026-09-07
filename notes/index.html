@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>笔记</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;overflow:hidden;background:#1a1a2e;color:#eee}
+.app{display:flex;height:100vh}
+.sidebar{width:260px;background:#16213e;border-right:1px solid #2a2a4a;display:flex;flex-direction:column;flex-shrink:0}
+.sidebar-header{padding:14px;border-bottom:1px solid #2a2a4a}
+.sidebar-title{font-size:15px;font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.file-name{font-size:11px;color:#556;font-weight:400;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-box{position:relative}
+.search-box input{width:100%;padding:7px 11px 7px 30px;background:#1a1a2e;border:1px solid #2a2a4a;border-radius:5px;color:#eee;font-size:13px;outline:none}
+.search-box input:focus{border-color:#e94560}
+.search-box::before{content:'🔍';position:absolute;left:7px;top:50%;transform:translateY(-50%);font-size:11px}
+.btn-row{display:flex;gap:6px;margin-top:10px}
+.btn{padding:6px 12px;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:500;transition:all .15s}
+.btn-new{background:#e94560;color:#fff;flex:1}
+.btn-new:hover{background:#ff6b81}
+.btn-save{background:#253a5e;color:#aab;border:1px solid #2a2a4a}
+.btn-save:hover{background:#2a4a6e;color:#eee}
+.btn-del{background:transparent;color:#e74c3c;border:1px solid #e74c3c}
+.btn-del:hover{background:#e74c3c;color:#fff}
+.note-list{flex:1;overflow-y:auto;padding:6px}
+.note-list::-webkit-scrollbar{width:4px}
+.note-list::-webkit-scrollbar-thumb{background:#2a2a4a;border-radius:2px}
+.note-item{padding:10px;border-radius:5px;cursor:pointer;margin-bottom:3px;transition:background .15s}
+.note-item:hover{background:#1e2a45}
+.note-item.active{background:#253a5e;border-left:3px solid #e94560}
+.note-title{font-size:13px;font-weight:500;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note-preview{font-size:11px;color:#667;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.note-date{font-size:10px;color:#556}
+.empty{color:#556;text-align:center;padding:30px 16px;font-size:12px}
+.editor{flex:1;display:flex;flex-direction:column;background:#1a1a2e}
+.editor-header{padding:12px 18px;border-bottom:1px solid #2a2a4a;display:flex;justify-content:space-between;align-items:center}
+.editor-meta{font-size:11px;color:#556}
+.editor-body{flex:1;padding:18px;display:flex;flex-direction:column}
+#title-input{width:100%;font-size:20px;font-weight:600;background:transparent;border:none;color:#eee;outline:none;margin-bottom:12px}
+#title-input::placeholder{color:#556}
+#content-editor{width:100%;flex:1;resize:none;background:transparent;border:none;color:#aab;font-size:14px;line-height:1.7;outline:none;font-family:inherit}
+#content-editor::placeholder{color:#445}
+.empty-editor{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;color:#445}
+.empty-editor span{font-size:36px;opacity:.4}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title">
+        <span>📓 笔记</span>
+        <span class="file-name" id="file-name">未命名</span>
+      </div>
+      <div class="search-box"><input type="text" id="search" placeholder="搜索笔记..."></div>
+      <div class="btn-row">
+        <button class="btn btn-save" id="save-btn">保存</button>
+        <button class="btn btn-new" id="new-btn">+ 新建</button>
+        <button class="btn btn-del" id="del-btn">删除</button>
+      </div>
+    </div>
+    <div class="note-list" id="note-list"></div>
+  </aside>
+  <main class="editor" id="editor">
+    <div class="empty-editor"><span>📝</span><p>选择或创建笔记</p></div>
+  </main>
+</div>
+<input type="file" id="file-input" accept=".json" style="display:none">
+
+<script>
+// ========== 数据层 ==========
+let notes = [];          // 内存中的笔记列表
+let currentId = null;    // 当前选中笔记 id
+let fileName = '未命名'; // 当前文件名
+let unsaved = false;     // 是否有未保存的修改
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtDate(iso) {
+  return new Date(iso).toLocaleString('zh-CN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+
+// 从数组操作数据（不触发保存）
+function findNote(id) { return notes.find(n => n.id === id) || null; }
+function getCurrentNote() { return currentId ? findNote(currentId) : null; }
+function addNote(title, content) {
+  const note = { id: genId(), title: title||'', content: content||'', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  notes.unshift(note);
+  markUnsaved();
+  return note;
+}
+function updateNote(id, field, value) {
+  const n = findNote(id);
+  if (!n) return;
+  n[field] = value;
+  n.updatedAt = new Date().toISOString();
+  markUnsaved();
+}
+function deleteNote(id) {
+  notes = notes.filter(n => n.id !== id);
+  markUnsaved();
+}
+function searchNotes(q) {
+  q = q.toLowerCase().trim();
+  if (!q) return notes;
+  return notes.filter(n => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q));
+}
+
+function markUnsaved() {
+  unsaved = true;
+  document.getElementById('file-name').textContent = fileName + ' *';
+}
+
+// ========== 渲染 ==========
+function renderList(query) {
+  const list = document.getElementById('note-list');
+  list.innerHTML = '';
+  const items = query ? searchNotes(query) : notes;
+
+  if (!items.length) {
+    list.innerHTML = '<div class="empty">' + (query ? '未找到笔记' : '暂无笔记') + '</div>';
+    return;
+  }
+
+  items.forEach(n => {
+    const el = document.createElement('div');
+    el.className = 'note-item' + (n.id === currentId ? ' active' : '');
+    el.innerHTML =
+      '<div class="note-title">' + esc(n.title || '无标题') + '</div>' +
+      '<div class="note-preview">' + esc((n.content||'空笔记').slice(0,50)) + '</div>' +
+      '<div class="note-date">' + fmtDate(n.updatedAt) + '</div>';
+    el.addEventListener('click', () => selectNote(n.id));
+    list.appendChild(el);
+  });
+}
+
+function renderEditor() {
+  const editor = document.getElementById('editor');
+  const note = getCurrentNote();
+
+  if (!note) {
+    editor.innerHTML = '<div class="empty-editor"><span>📝</span><p>选择或创建笔记</p></div>';
+    return;
+  }
+
+  editor.innerHTML =
+    '<div class="editor-header"><span class="editor-meta">创建于 ' + fmtDate(note.createdAt) + '</span>' +
+    '<button class="btn btn-del" id="editor-del">删除</button></div>' +
+    '<div class="editor-body">' +
+      '<input type="text" id="title-input" placeholder="标题">' +
+      '<textarea id="content-editor" placeholder="开始书写..."></textarea>' +
+    '</div>';
+
+  const titleInput = document.getElementById('title-input');
+  const contentEditor = document.getElementById('content-editor');
+  titleInput.value = note.title;
+  contentEditor.value = note.content;
+
+  titleInput.addEventListener('input', e => {
+    updateNote(currentId, 'title', e.target.value);
+    renderList(document.getElementById('search').value);
+  });
+
+  contentEditor.addEventListener('input', e => {
+    updateNote(currentId, 'content', e.target.value);
+    renderList(document.getElementById('search').value);
+  });
+
+  document.getElementById('editor-del').addEventListener('click', () => {
+    if (!confirm('确定删除「' + note.title + '」吗？')) return;
+    deleteNote(currentId);
+    currentId = null;
+    renderList(document.getElementById('search').value);
+    renderEditor();
+  });
+}
+
+function selectNote(id) {
+  currentId = id;
+  renderList(document.getElementById('search').value);
+  renderEditor();
+}
+
+function createNewNote() {
+  const note = addNote('新笔记', '');
+  selectNote(note.id);
+  setTimeout(() => {
+    const t = document.getElementById('title-input');
+    if (t) { t.focus(); t.select(); }
+  }, 10);
+}
+
+// ========== 文件读写 ==========
+const fileInput = document.getElementById('file-input');
+
+function openFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (Array.isArray(data)) {
+        notes = data;
+        fileName = file.name.replace(/\.json$/i, '');
+        document.getElementById('file-name').textContent = fileName;
+        currentId = null;
+        unsaved = false;
+        renderList();
+        renderEditor();
+      }
+    } catch {
+      alert('文件格式错误，请确保是有效的 JSON 文件');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function saveFile() {
+  const blob = new Blob([JSON.stringify(notes, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (fileName || '笔记') + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  unsaved = false;
+  document.getElementById('file-name').textContent = fileName;
+}
+
+// ========== 绑定 ==========
+document.getElementById('new-btn').addEventListener('click', createNewNote);
+document.getElementById('save-btn').addEventListener('click', saveFile);
+document.getElementById('del-btn').addEventListener('click', () => {
+  if (!currentId) return;
+  const note = getCurrentNote();
+  if (!confirm('确定删除「' + note.title + '」吗？')) return;
+  deleteNote(currentId);
+  currentId = null;
+  renderList(document.getElementById('search').value);
+  renderEditor();
+});
+document.getElementById('search').addEventListener('input', e => renderList(e.target.value));
+document.getElementById('file-input').addEventListener('change', e => {
+  if (e.target.files.length) openFile(e.target.files[0]);
+  e.target.value = '';
+});
+
+// 点击侧边栏的文件名可打开文件
+document.getElementById('file-name').addEventListener('click', () => fileInput.click());
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey||e.metaKey) && e.key==='n') { e.preventDefault(); createNewNote(); }
+  if ((e.ctrlKey||e.metaKey) && e.key==='f') { e.preventDefault(); document.getElementById('search').focus(); }
+  if ((e.ctrlKey||e.metaKey) && e.key==='s') { e.preventDefault(); saveFile(); }
+});
+
+renderList();
+</script>
+</body>
+</html>
